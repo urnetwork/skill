@@ -1,6 +1,7 @@
 ---
-name: urnetwork-proxy
-description: Use this skill to connect generated code and agents to network proxies for anonymous, local internet with specific cities, regions, and countries.
+name: urnetwork
+description: Use this skill to connect generated code and agents to urnetwork for anonymous, local internet with specific cities, regions, and countries.
+license: MPL2.0, see LICENSE
 ---
 
 # Overview
