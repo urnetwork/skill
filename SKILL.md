@@ -122,7 +122,7 @@ curl -s -X POST https://api.bringyour.com/network/auth-client \
 
 ## Handling errors
 
-`/network/auth-client` reports plan limits in **two** ways. Handle both.
+`/network/auth-client` reports plan limits as an HTTP 200 with an `error` object. If you ask for x402 terms (`X-UR-X402: 1`, see below), a limit that UR Pro lifts answers HTTP 402 instead. Handle both.
 
 ### 1. HTTP 200 with an `error` object
 
@@ -132,7 +132,7 @@ curl -s -X POST https://api.bringyour.com/network/auth-client \
 
 | Response | Meaning | What to do |
 | --- | --- | --- |
-| `upgrade_required: true` | The network is at its **plan's** limit for concurrent connected clients. Free allows 2; UR Pro allows 1000. | Upgrade. Either tell the human, or pay for it yourself — see [Paying with x402](#paying-with-x402). Do **not** retry; it will keep failing. |
+| `upgrade_required: true` | A **plan** limit that UR Pro lifts: the free plan's 5 active proxies or 5 new proxies a minute (UR Pro: 1000 and 20 a minute), its concurrent client limit, or a Pro-only feature. The `message` says which. | Upgrade. Either tell the human, or pay for it yourself — see [Paying with x402](#paying-with-x402). Do **not** retry in a loop: the proxy cap holds until a proxy is removed, and the rate until the next minute. |
 | `client_limit_exceeded: true` **without** `upgrade_required` | A **hard cap** on provisioned clients. Upgrading does not lift it. | Release clients you are no longer using, then retry. |
 | `socks_proxy_url` empty / `wg_config` null, no error | SOCKS and WireGuard are **Pro-only** and were not issued. | Upgrade, or use the HTTPS proxy instead. Do not retry. |
 
@@ -140,7 +140,7 @@ Every proxy you create counts as a concurrent client, so a scraping fan-out is t
 
 ### 2. HTTP 402 Payment Required
 
-The server is quoting you a price. The body is x402 payment terms:
+Only when you asked for it: the request carried `X-UR-X402: 1`. The server is quoting you a price. The body is x402 payment terms:
 
 ```json
 {
@@ -160,12 +160,21 @@ Pay it and retry — see below.
 
 x402 lets an agent buy an upgrade inline, with no human and no checkout page. It is **chain-neutral**: one entry in `accepts[]` per supported chain, and you pick whichever you hold funds on.
 
-**The flow is: request → 402 → pay → retry the SAME request with an `X-PAYMENT` header.**
+**The flow is: request with `X-UR-X402: 1` → 402 → pay → retry the SAME request with an `X-PAYMENT` header.**
+
+x402 has no header a client sends before it is quoted, so the server quotes only a request that asks with `X-UR-X402: 1`. Without it a plan limit is the HTTP 200 with `upgrade_required` above, never a 402, and you get the terms from `/x402/purchase` instead (below).
 
 ```bash
+# ask for terms: a plan limit answers 402 with them
+curl -s -X POST https://api.bringyour.com/network/auth-client \
+  -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -H 'X-UR-X402: 1' \
+  -d '{"proxy_config": {...}}'
+
 # the same call that returned 402, now with a signed payment
 curl -s -X POST https://api.bringyour.com/network/auth-client \
   -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+  -H 'X-UR-X402: 1' \
   -H "X-PAYMENT: <base64 signed x402 payload>" \
   -d '{"proxy_config": {...}}'
 ```
@@ -182,13 +191,13 @@ curl -s https://api.bringyour.com/x402/skus   # public; no JWT needed
 
 | `sku_id` | What it grants |
 | --- | --- |
-| `pro_1month` | UR Pro for one month: raises the concurrent client limit, and enables SOCKS + WireGuard. |
+| `pro_1month` | UR Pro for one month: raises the proxy cap and create rate and the concurrent client limit, and enables SOCKS + WireGuard. |
 | `data_1tib` | 1 TiB of data. **Data only — this does not grant Pro.** |
 | `data_10tib` | 10 TiB of data. **Data only — this does not grant Pro.** |
 
 Buying data does **not** lift a concurrent-client limit and does **not** enable SOCKS or WireGuard. If you got `upgrade_required`, you need `pro_1month`.
 
-To buy something directly rather than waiting to be quoted:
+To buy something directly rather than waiting to be quoted (for example after an `upgrade_required` you did not ask to be quoted for; then retry the refused request):
 
 ```bash
 # no X-PAYMENT -> answers 402 with the terms for this sku
