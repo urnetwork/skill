@@ -140,27 +140,34 @@ Every proxy you create counts as a concurrent client, so a scraping fan-out is t
 
 ### 2. HTTP 402 Payment Required
 
-Only when you asked for it: the request carried `X-UR-X402: 1`. The server is quoting you a price. The body is x402 payment terms:
+Only when you asked for it: the request carried `X-UR-X402: 1`. The server is quoting you a price, in both x402 protocol versions at once:
+
+- **x402 v2:** the `PAYMENT-REQUIRED` response header, base64 of this JSON. Networks are CAIP-2 ids (`eip155:8453` is Base, `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` is Solana).
 
 ```json
 {
-  "x402Version": 1,
-  "error": "payment required for pro_1month",
+  "x402Version": 2,
+  "error": "<why>. UR Pro, 1 month costs $5.00 in USDC. x402 clients refuse a payment over $1 by default: raise your client's per-payment cap to $5.00 or more to pay (see https://ur.io/agents.md).",
+  "resource": { "url": "https://api.bringyour.com/network/auth-client",
+                "description": "UR Pro, 1 month", "mimeType": "application/json" },
   "accepts": [
-    { "scheme": "exact", "network": "base", "maxAmountRequired": "5000000",
-      "asset": "usdc", "payTo": "<merchant>", "resource": "/network/auth-client",
-      "description": "UR Pro, 1 month", "maxTimeoutSeconds": 300 }
+    { "scheme": "exact", "network": "eip155:8453", "amount": "5000000",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "payTo": "<merchant>",
+      "maxTimeoutSeconds": 300, "extra": { "name": "USD Coin", "version": "2" } },
+    { "scheme": "exact", "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "amount": "5000000", "...": "..." }
   ]
 }
 ```
 
-Pay it and retry — see below.
+- **x402 v1:** the body, the same terms with networks by name (`base`, `solana`), `maxAmountRequired` instead of `amount`, and each term's own `resource`.
+
+An x402 client library reads whichever version it speaks. Pay it and retry — see below.
 
 ## Paying with x402
 
 x402 lets an agent buy an upgrade inline, with no human and no checkout page. It is **chain-neutral**: one entry in `accepts[]` per supported chain, and you pick whichever you hold funds on.
 
-**The flow is: request with `X-UR-X402: 1` → 402 → pay → retry the SAME request with an `X-PAYMENT` header.**
+**The flow is: request with `X-UR-X402: 1` → 402 → pay → retry the SAME request with the signed payment in a `PAYMENT-SIGNATURE` header (x402 v2) or an `X-PAYMENT` header (x402 v1).** Send one payment header, not both.
 
 x402 has no header a client sends before it is quoted, so the server quotes only a request that asks with `X-UR-X402: 1`. Without it a plan limit is the HTTP 200 with `upgrade_required` above, never a 402, and you get the terms from `/x402/purchase` instead (below).
 
@@ -171,17 +178,36 @@ curl -s -X POST https://api.bringyour.com/network/auth-client \
   -H 'X-UR-X402: 1' \
   -d '{"proxy_config": {...}}'
 
-# the same call that returned 402, now with a signed payment
+# the same call that returned 402, now with a signed x402 v2 payment
 curl -s -X POST https://api.bringyour.com/network/auth-client \
   -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
   -H 'X-UR-X402: 1' \
-  -H "X-PAYMENT: <base64 signed x402 payload>" \
+  -H "PAYMENT-SIGNATURE: <base64 signed x402 v2 payload>" \
   -d '{"proxy_config": {...}}'
 ```
 
-On success you get `200` plus an `X-PAYMENT-RESPONSE` header carrying the settlement receipt. The upgrade takes effect immediately, so the retried request simply succeeds.
+On success you get `200` plus the settlement receipt in a `PAYMENT-RESPONSE` header (`X-PAYMENT-RESPONSE` for an x402 v1 payment). The upgrade takes effect immediately, so the retried request simply succeeds. A payment that is refused comes back as another 402 with the terms, the reason in their `error`; nothing was charged for it. A malformed payment is a 400.
 
 Amounts are integer atomic units of the asset: USDC has 6 decimals, so `"5000000"` is **$5.00**.
+
+### Raise your client's per-payment cap first
+
+x402 clients refuse a payment over $1 by default, and every sku costs more (UR Pro is $5 a month), so a default client refuses the terms above before it signs anything. Set the cap to at least the price of what you buy:
+
+```
+// TypeScript (@x402/core, @x402/fetch, @x402/axios, @x402/mcp)
+spendControls: { maxAmountPerPayment: "$5" }
+// Go (github.com/x402-foundation/x402/go/v2)
+client.SetSpendControls(x402.SpendControls{MaxAmountPerPayment: "$5"})
+# Python (x402)
+spend_controls={"max_amount_per_payment": "$5"}
+// Coinbase AgentKit (or X402_MAX_PAYMENT_USDC=5); it pays only registered services
+x402ActionProvider({ maxPaymentUsdc: 5, registeredServices: ["https://api.bringyour.com"] })
+// v1 x402-fetch: maxValue in atomic USDC (the default is $0.10)
+wrapFetchWithPayment(fetch, walletClient, BigInt(5_000_000))
+```
+
+Keep the cap no higher than `URNETWORK_X402_MAX` (below). The 402's `error` and `/x402/skus` (`price_usd` and the atomic `amount` of each sku) say the price.
 
 ### What you can buy
 
@@ -200,15 +226,15 @@ Buying data does **not** lift a concurrent-client limit and does **not** enable 
 To buy something directly rather than waiting to be quoted (for example after an `upgrade_required` you did not ask to be quoted for; then retry the refused request):
 
 ```bash
-# no X-PAYMENT -> answers 402 with the terms for this sku
+# no payment -> answers 402 with the terms for this sku
 curl -s -X POST https://api.bringyour.com/x402/purchase \
   -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
   -d '{"sku_id": "pro_1month", "email": "receipts@example.com"}'
 
-# with X-PAYMENT -> settles and grants
+# with a signed payment (PAYMENT-SIGNATURE, or X-PAYMENT in x402 v1) -> settles and grants
 curl -s -X POST https://api.bringyour.com/x402/purchase \
   -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
-  -H "X-PAYMENT: <base64 signed x402 payload>" \
+  -H "PAYMENT-SIGNATURE: <base64 signed x402 v2 payload>" \
   -d '{"sku_id": "pro_1month", "email": "receipts@example.com"}'
 ```
 
@@ -217,6 +243,6 @@ curl -s -X POST https://api.bringyour.com/x402/purchase \
 ### Spend safely
 
 - **Honor a hard cap.** If `URNETWORK_X402_MAX` is set (a USD ceiling), never pay above it. Stop and ask the human instead.
-- **Never pay twice for the same 402.** Settlement is not idempotent from your side — retry the request once with the payment, and if it still fails, stop and report rather than paying again.
+- **Never pay twice for the same 402.** Settlement is not idempotent from your side — retry the request once with the payment, and if it still fails, stop and report rather than paying again. If the refusal's reason is `settlement_pending`, your payment was broadcast and may still confirm: do not sign another one.
 - **Pay only terms the server quoted.** Use an entry from `accepts[]` verbatim; never construct your own `payTo` or amount.
 - If `/x402/skus` returns 404, x402 is not enabled on this deployment. Fall back to telling the human to upgrade.
