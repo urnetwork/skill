@@ -192,7 +192,7 @@ Amounts are integer atomic units of the asset: USDC has 6 decimals, so `"5000000
 
 ### Raise your client's per-payment cap first
 
-x402 clients refuse a payment over $1 by default, and every sku costs more (UR Pro is $5 a month), so a default client refuses the terms above before it signs anything. Set the cap to at least the price of what you buy:
+x402 clients refuse a payment over $1 by default, and every sku but `data_256gib` costs more (UR Pro is $5 a month), so a default client refuses those terms before it signs anything. Set the cap to at least the price of what you buy:
 
 ```
 // TypeScript (@x402/core, @x402/fetch, @x402/axios, @x402/mcp)
@@ -209,6 +209,8 @@ wrapFetchWithPayment(fetch, walletClient, BigInt(5_000_000))
 
 Keep the cap no higher than `URNETWORK_X402_MAX` (below). The 402's `error` and `/x402/skus` (`price_usd` and the atomic `amount` of each sku) say the price.
 
+**A client with a $1 cap it cannot raise** (Cloudflare Agents' `withX402Client` builds its x402 client without spend controls, so it refuses anything over $1) can buy `data_256gib`: 256 GiB of data for $0.75, atomic amount `750000`. It is the pack for clients with a $1 per-payment cap. A default x402 SDK client or Coinbase AgentKit pays it as it is; a client that defaults to $0.10 (the v1 `x402-fetch`'s `maxValue`, `withX402Client`'s `maxPaymentValue`) needs its cap set to at least `750000`. It is data only: it does not lift a plan limit, so an `upgrade_required` refusal still needs `pro_1month`.
+
 ### What you can buy
 
 ```bash
@@ -220,6 +222,7 @@ curl -s https://api.bringyour.com/x402/skus   # public; no JWT needed
 | `pro_1month` | UR Pro for one month: raises the proxy cap and create rate and the concurrent client limit, and enables SOCKS + WireGuard. |
 | `data_1tib` | 1 TiB of data. **Data only — this does not grant Pro.** |
 | `data_10tib` | 10 TiB of data. **Data only — this does not grant Pro.** |
+| `data_256gib` | 256 GiB of data for $0.75: the pack for clients with a $1 per-payment cap. Sold only over x402 and with Pay with Gamma. **Data only — this does not grant Pro.** |
 
 Buying data does **not** lift a concurrent-client limit and does **not** enable SOCKS or WireGuard. If you got `upgrade_required`, you need `pro_1month`.
 
