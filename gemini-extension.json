@@ -1,0 +1,10 @@
+{
+  "name": "urnetwork",
+  "version": "2026.11.18",
+  "contextFileName": "SKILL.md",
+  "mcpServers": {
+    "urnetwork": {
+      "httpUrl": "https://mcp.bringyour.com"
+    }
+  }
+}

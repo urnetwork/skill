@@ -1,0 +1,11 @@
+{
+  "name": "urnetwork",
+  "version": "2026.11.18",
+  "description": "Private web fetch and egress through residential IPs in many countries on URnetwork.",
+  "author": { "name": "URnetwork", "url": "https://ur.io" },
+  "homepage": "https://ur.io/agents",
+  "repository": "https://github.com/urnetwork/skill",
+  "license": "MPL-2.0",
+  "keywords": ["mcp", "proxy", "residential-proxy", "privacy", "vpn", "web-fetch"],
+  "mcpServers": "./.mcp.json"
+}
